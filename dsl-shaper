@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Traffic shaping for DSL (c) 2019 Dimos Dimoulis
+# Traffic shaping for DSL
+# Copyright (c) 2019 Dimos Dimoulis
 
 # set -x
 
@@ -76,8 +77,7 @@ local rate=$2
 calculate_burst $rate
 # r2q must allow for MTU bytes in minimum rate, which is rate/2 for a subclass. So we set r2q'=r2q/2
 
-#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
-tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: htb default 11 r2q $[r2q/2]
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: htb default 11 r2q $[r2q/2]
 tc class add dev $dev parent 1: classid 1:1 htb rate $[rate]kbit ceil $[rate]kbit burst $maxburst
 tc class add dev $dev parent 1:1 classid 1:10 htb rate $[rate/2]kbit ceil $[rate]kbit burst $maxburst prio 1
 tc class add dev $dev parent 1:1 classid 1:11 htb rate $[rate/2]kbit ceil $[rate]kbit burst $minburst prio 2
@@ -92,8 +92,7 @@ local rate=$2
 
 calculate_burst $rate
 
-#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
-tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: htb default 1 r2q $r2q
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: htb default 1 r2q $r2q
 tc class add dev $dev parent 1: classid 1:1 htb rate $[rate]kbit ceil $[rate]kbit burst $minburst
 
 tc qdisc add dev $dev parent 1:1 fq_codel interval ${rtt}ms
@@ -106,8 +105,7 @@ local rate=$2
 
 #calculate_burst $rate
 
-#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
-tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: hfsc default 11
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: hfsc default 11
 tc class add dev $dev parent 1: classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
 tc class add dev $dev parent 1:1 classid 1:10 hfsc ls m1 $[8*rate/10]kbit d 25ms m2 $[rate/2]kbit
 tc class add dev $dev parent 1:1 classid 1:11 hfsc ls m2 $[rate/2]kbit
@@ -122,8 +120,7 @@ local rate=$2
 
 #calculate_burst $rate
 
-#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
-tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: hfsc default 1
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: hfsc default 1
 tc class add dev $dev parent 1: classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
 
 tc qdisc add dev $dev parent 1:1 fq_codel interval ${rtt}ms
@@ -196,6 +193,7 @@ fi
 
 setup_ifb $ifb
 
+# choose hfsc, htb, hfsc_single or htb_single here
 hfsc $ifb $[90*downrate/100]
 filters $ifb sport
 redirect_to_ifb $dev $ifb
