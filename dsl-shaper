@@ -1,0 +1,201 @@
+#!/bin/bash
+
+# Traffic shaping for DSL (c) 2019 Dimos Dimoulis
+
+# set -x
+
+### configuration
+
+# overhead values:
+# https://web.archive.org/web/20150606220856/http://ace-host.stuart.id.au/russell/files/tc/tc-atm/
+
+overhead=26 # PPPoE, LLC/SNAP
+# overhead=0 # PPPoA, LLC/SNAP
+# overhead=-4 # PPPoA, VC/Mux
+linklayer=ethernet # VDSL and other
+# linklayer=adsl # ADSL
+ports="80 443 53 22"
+ifb=ifb0
+# optional settings
+hz=300 # only used for HTB calculations
+rtt=400 # worse RTT without ingress shaping for background traffic
+
+### helper functions
+
+show_help() {
+  echo "$0 device uprate [downrate]"
+  echo "$0 device clear"
+}
+
+tc() {
+#  echo tc "$@"
+  /usr/bin/tc "$@"
+}
+
+# accepts rate as argument
+# returns (as globals) minburst, maxburst, r2q
+calculate_burst() {
+# Burst of parent class must be at least as high as it's children
+# quantum=rate/r2q, must be as small as possible and higher than mtu
+local rate=$1
+local mtu=1600
+
+minburst=$[rate*1000/(8*$hz)]
+if [ $minburst -lt $mtu ]; then minburst=$mtu; fi
+maxburst=$[10*minburst]
+r2q=$[rate*1000/(mtu*8)]
+}
+
+clear_egress() {
+local dev=$1
+
+tc qdisc del dev $dev root
+}
+
+clear_ingress() {
+local dev=$1
+local ifb=$2
+
+tc qdisc del dev $dev ingress
+tc qdisc del dev $ifb root
+ifconfig $ifb down
+modprobe -r ifb
+}
+
+setup_ifb() {
+local ifb=$1
+
+modprobe ifb numifbs=1
+ifconfig $ifb up
+}
+
+htb() {
+local dev=$1
+local rate=$2
+
+calculate_burst $rate
+# r2q must allow for MTU bytes in minimum rate, which is rate/2 for a subclass. So we set r2q'=r2q/2
+
+#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: htb default 11 r2q $[r2q/2]
+tc class add dev $dev parent 1: classid 1:1 htb rate $[rate]kbit ceil $[rate]kbit burst $maxburst
+tc class add dev $dev parent 1:1 classid 1:10 htb rate $[rate/2]kbit ceil $[rate]kbit burst $maxburst prio 1
+tc class add dev $dev parent 1:1 classid 1:11 htb rate $[rate/2]kbit ceil $[rate]kbit burst $minburst prio 2
+
+tc qdisc add dev $dev parent 1:10 fq_codel
+tc qdisc add dev $dev parent 1:11 fq_codel #interval ${rtt}ms
+}
+
+htb_single() {
+local dev=$1
+local rate=$2
+
+calculate_burst $rate
+
+#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: htb default 1 r2q $r2q
+tc class add dev $dev parent 1: classid 1:1 htb rate $[rate]kbit ceil $[rate]kbit burst $minburst
+
+tc qdisc add dev $dev parent 1:1 fq_codel interval ${rtt}ms
+}
+
+# http://linux-tc-notes.sourceforge.net/tc/doc/sch_hfsc.txt
+hfsc() {
+local dev=$1
+local rate=$2
+
+#calculate_burst $rate
+
+#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: hfsc default 11
+tc class add dev $dev parent 1: classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
+tc class add dev $dev parent 1:1 classid 1:10 hfsc ls m1 $[8*rate/10]kbit d 25ms m2 $[rate/2]kbit
+tc class add dev $dev parent 1:1 classid 1:11 hfsc ls m2 $[rate/2]kbit
+
+tc qdisc add dev $dev parent 1:10 fq_codel
+tc qdisc add dev $dev parent 1:11 fq_codel #interval ${rtt}ms
+}
+
+hfsc_single() {
+local dev=$1
+local rate=$2
+
+#calculate_burst $rate
+
+#tc qdisc add dev $dev stab overhead $overhead mtu 1500 mpu 53 linklayer atm root handle 1: htb default 11
+tc qdisc add dev $dev stab overhead $overhead mtu 1500 root handle 1: hfsc default 1
+tc class add dev $dev parent 1: classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
+
+tc qdisc add dev $dev parent 1:1 fq_codel interval ${rtt}ms
+}
+
+
+filters() {
+local dev=$1
+local port=$2 # must be dport for egress, sport for ingress
+local p
+
+# Default (background) traffic goes to class :11
+# Foreground traffic goes to class :10
+
+# ICMP IPv4 (ping)
+tc filter add dev $dev parent 1: protocol ip prio 1 u32 match ip protocol 1 0xff flowid 1:10
+
+# TCP/UDP
+for p in $ports; do
+# IPv4
+tc filter add dev $dev parent 1: protocol ip prio 2 u32 match ip $port $p 0xffff flowid 1:10
+# IPv6
+tc filter add dev $dev parent 1: protocol ipv6 prio 3 u32 match ip6 $port $p 0xffff flowid 1:10
+done
+}
+
+redirect_to_ifb() {
+local dev=$1
+local ifb=$2
+
+tc qdisc add dev $dev ingress
+
+tc filter add dev $dev parent ffff: protocol ip prio 1 u32 \
+  match u32 0 0 flowid 1:11 \
+  action mirred egress redirect dev $ifb
+
+tc filter add dev $dev parent ffff: protocol ipv6 prio 2 u32 \
+  match u32 0 0 flowid 1:11 \
+  action mirred egress redirect dev $ifb
+}
+  
+### main
+dev="$1"
+uprate="$2"
+downrate="$3"
+
+if [ -z "$dev" ] || [ -z "$uprate" ]; then
+  show_help
+  exit 1
+fi
+
+if [ `id -u` != 0 ]; then
+  echo "Run as root"
+  exit 1
+fi
+
+clear_egress $dev 2>/dev/null
+clear_ingress $dev $ifb 2>/dev/null
+
+if [ "$uprate" == "clear" ]; then
+  exit 0
+fi
+
+hfsc $dev $uprate
+filters $dev dport
+
+if [ -z "$downrate" ]; then
+  exit 0;
+fi
+
+setup_ifb $ifb
+
+hfsc $ifb $[90*downrate/100]
+filters $ifb sport
+redirect_to_ifb $dev $ifb
