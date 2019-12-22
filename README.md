@@ -22,7 +22,7 @@ overhead=-4
 linklayer=adsl # ADSL
 ```
 
-These are some typical examples. Notice that the overhead value can be negative. linklayer is set to "adsl" for ADSL connections only, other types of connections use "ethernet" instead. You can find more values for overhead and details on the rationale in https://web.archive.org/web/20150606220856/http://ace-host.stuart.id.au/russell/files/tc/tc-atm/
+These are some typical examples. Notice that the overhead value can be negative. linklayer is set to "adsl" for ADSL connections only, other types of connections use "ethernet" instead. You can find more values of overhead at the end of the page.
 
 Also set the ports that will be considered foreground traffic, say web browsing or a ssh connection while anything else will be considered bulk background traffic. These settings apply to both TCP and UDP ports.
 
@@ -42,6 +42,26 @@ sudo dsl-shaper eth0 clear
 ```
 
 Shaping upstream is "free", that is it will not reduce your upload speeds, just the latency. Shaping downstream however has a cost. For best results is it recommended to enable it anyway.
+
+## Overhead parameter
+These values come from https://web.archive.org/web/20150606220856/http://ace-host.stuart.id.au/russell/files/tc/tc-atm/ where you can find details on the rationale.
+
+When an external router handles PPP, values in the last column should be used. It's unlikely that your connection uses FCS.
+
+Connection | Overhead int | Overhead ext
+-----------|------------|-----------
+IPoA, VC/Mux | 8 | -6
+IPoA, LLC/SNAP | 16 | 2
+Bridged, VC/Mux | 24 | 10
+Bridged, VC/Mux+FCS | 28 | 14
+Bridged, LLC/SNAP | 32 | 18
+Bridged, LLC/SNAP+FCS | 36 | 22
+PPPoA, VC/Mux | 10 | -4
+PPPoA, LLC/SNAP | 14 | 0
+PPPoE, VC/Mux | 32 | 18
+PPPoE, VC/Mux+FCS | 36 | 22
+PPPoE, LLC/SNAP | 40 | 26
+PPPoE, LLC/SNAP+FCS | 44 | 30
 
 ## Improvements
 - Could add an extra class for real time traffic.
