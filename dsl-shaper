@@ -17,6 +17,9 @@ linklayer=ethernet # VDSL and other
 # linklayer=adsl # ADSL
 ports="80 443 53 22"
 ifb=ifb0
+# lan: bypass traffic shaping
+lanip=192.168.1.0/24
+lanbw=100 # LAN bandwidth in mbit
 # optional settings
 hz=300 # only used for HTB calculations
 rtt=400 # worse RTT without ingress shaping for background traffic
@@ -29,7 +32,7 @@ show_help() {
 }
 
 tc() {
-#  echo tc "$@"
+  # echo tc "$@"
   /usr/bin/tc "$@"
 }
 
@@ -106,10 +109,13 @@ local rate=$2
 #calculate_burst $rate
 
 tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: hfsc default 11
-tc class add dev $dev parent 1: classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
+tc class add dev $dev parent 1: classid 1:999 hfsc ls m2 $[lanbw]mbit ul m2 $[lanbw]mbit
+tc class add dev $dev parent 1:999 classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
+tc class add dev $dev parent 1:999 classid 1:2 hfsc ls m2 $[lanbw]mbit
 tc class add dev $dev parent 1:1 classid 1:10 hfsc ls m1 $[8*rate/10]kbit d 25ms m2 $[rate/2]kbit
 tc class add dev $dev parent 1:1 classid 1:11 hfsc ls m2 $[rate/2]kbit
 
+tc qdisc add dev $dev parent 1:2 fq_codel
 tc qdisc add dev $dev parent 1:10 fq_codel
 tc qdisc add dev $dev parent 1:11 fq_codel #interval ${rtt}ms
 }
@@ -121,29 +127,37 @@ local rate=$2
 #calculate_burst $rate
 
 tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: hfsc default 1
-tc class add dev $dev parent 1: classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
+tc class add dev $dev parent 1: classid 1:999 hfsc ls m2 $[lanbw]mbit ul m2 $[lanbw]mbit
+tc class add dev $dev parent 1:999 classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
+tc class add dev $dev parent 1:999 classid 1:2 hfsc ls m2 $[lanbw]mbit
 
 tc qdisc add dev $dev parent 1:1 fq_codel interval ${rtt}ms
+tc qdisc add dev $dev parent 1:2 fq_codel
 }
 
 
 filters() {
 local dev=$1
 local port=$2 # must be dport for egress, sport for ingress
+local direction=$3 # must be dst for egress, src for ingress
 local p
 
 # Default (background) traffic goes to class :11
 # Foreground traffic goes to class :10
+# LAN traffic goes to class :2
+
+# LAN
+tc filter add dev $dev parent 1: protocol ip prio 1 u32 match ip $direction $lanip flowid 1:2
 
 # ICMP IPv4 (ping)
-tc filter add dev $dev parent 1: protocol ip prio 1 u32 match ip protocol 1 0xff flowid 1:10
+tc filter add dev $dev parent 1: protocol ip prio 2 u32 match ip protocol 1 0xff flowid 1:10
 
 # TCP/UDP
 for p in $ports; do
 # IPv4
-tc filter add dev $dev parent 1: protocol ip prio 2 u32 match ip $port $p 0xffff flowid 1:10
+tc filter add dev $dev parent 1: protocol ip prio 3 u32 match ip $port $p 0xffff flowid 1:10
 # IPv6
-tc filter add dev $dev parent 1: protocol ipv6 prio 3 u32 match ip6 $port $p 0xffff flowid 1:10
+tc filter add dev $dev parent 1: protocol ipv6 prio 4 u32 match ip6 $port $p 0xffff flowid 1:10
 done
 }
 
@@ -185,7 +199,7 @@ if [ "$uprate" == "clear" ]; then
 fi
 
 hfsc $dev $uprate
-filters $dev dport
+filters $dev dport dst
 
 if [ -z "$downrate" ]; then
   exit 0;
@@ -195,5 +209,5 @@ setup_ifb $ifb
 
 # choose hfsc, htb, hfsc_single or htb_single here
 hfsc $ifb $[90*downrate/100]
-filters $ifb sport
+filters $ifb sport src
 redirect_to_ifb $dev $ifb
