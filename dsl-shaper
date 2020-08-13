@@ -29,6 +29,7 @@ rtt=400 # worse RTT without ingress shaping for background traffic
 show_help() {
   echo "$0 device uprate [downrate]"
   echo "$0 device clear"
+  echo "Rates are in kbps"
 }
 
 tc() {
@@ -111,7 +112,7 @@ local rate=$2
 tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: hfsc default 11
 tc class add dev $dev parent 1: classid 1:999 hfsc ls m2 $[lanbw]mbit ul m2 $[lanbw]mbit
 tc class add dev $dev parent 1:999 classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
-tc class add dev $dev parent 1:999 classid 1:2 hfsc ls m2 $[lanbw]mbit
+tc class add dev $dev parent 1:999 classid 1:2 hfsc ls m2 $[lanbw*1024-rate]kbit
 tc class add dev $dev parent 1:1 classid 1:10 hfsc ls m1 $[8*rate/10]kbit d 25ms m2 $[rate/2]kbit
 tc class add dev $dev parent 1:1 classid 1:11 hfsc ls m2 $[rate/2]kbit
 
@@ -129,7 +130,7 @@ local rate=$2
 tc qdisc add dev $dev stab overhead $overhead mtu 1500 linklayer $linklayer root handle 1: hfsc default 1
 tc class add dev $dev parent 1: classid 1:999 hfsc ls m2 $[lanbw]mbit ul m2 $[lanbw]mbit
 tc class add dev $dev parent 1:999 classid 1:1 hfsc ls m2 $[rate]kbit ul m2 $[rate]kbit
-tc class add dev $dev parent 1:999 classid 1:2 hfsc ls m2 $[lanbw]mbit
+tc class add dev $dev parent 1:999 classid 1:2 hfsc ls m2 $[lanbw*1024-rate]kbit
 
 tc qdisc add dev $dev parent 1:1 fq_codel interval ${rtt}ms
 tc qdisc add dev $dev parent 1:2 fq_codel
@@ -208,6 +209,6 @@ fi
 setup_ifb $ifb
 
 # choose hfsc, htb, hfsc_single or htb_single here
-hfsc $ifb $[90*downrate/100]
+hfsc $ifb $[95*downrate/100]
 filters $ifb sport src
 redirect_to_ifb $dev $ifb
